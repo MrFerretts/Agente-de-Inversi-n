@@ -12,16 +12,26 @@ import requests
 
 def enviar_telegram(mensaje):
     """Envía un mensaje a tu Telegram usando los Secrets."""
-    # Verificamos si Telegram está habilitado en los secretos
     tel_config = NOTIFICATIONS.get('telegram', {})
     if tel_config.get('enabled'):
         token = tel_config.get('bot_token')
         chat_id = tel_config.get('chat_id')
-        url = f"https://api.telegram.org/bot{token}/sendMessage?chat_id={chat_id}&text={mensaje}"
+        
+        # Usamos 'params' para que requests maneje los espacios y emojis automáticamente
+        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        payload = {"chat_id": chat_id, "text": mensaje}
+        
         try:
-            requests.get(url)
+            response = requests.post(url, data=payload)
+            if response.status_code == 200:
+                return True
+            else:
+                st.error(f"Telegram dice: {response.json().get('description')}")
+                return False
         except Exception as e:
-            st.error(f"Error al enviar Telegram: {e}")
+            st.error(f"Error de conexión: {e}")
+            return False
+    return False
 
 # --- PUENTE DE SEGURIDAD ---
 try:
