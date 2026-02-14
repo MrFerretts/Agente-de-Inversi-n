@@ -15,30 +15,25 @@ import pytz
 from market_data import MarketDataFetcher
 from technical_analysis import TechnicalAnalyzer
 
-# --- FUNCIONES DE NOTIFICACIÓN Y APOYO ---
+# --- FUNCIONES DE NOTIFICACIÓN ---
 def enviar_telegram(mensaje):
-    """Envía alertas cortas de backtesting a Telegram."""
     tel_config = NOTIFICATIONS.get('telegram', {})
     if tel_config.get('enabled'):
-        token = tel_config.get('bot_token')
-        chat_id = tel_config.get('chat_id')
+        token, chat_id = tel_config.get('bot_token'), tel_config.get('chat_id')
         url = f"https://api.telegram.org/bot{token}/sendMessage"
-        payload = {"chat_id": chat_id, "text": mensaje}
         try:
-            requests.post(url, data=payload)
+            requests.post(url, data={"chat_id": chat_id, "text": mensaje})
             return True
         except: return False
     return False
 
 def enviar_correo_maestro(vix_val, sentiment, df_html):
-    """Envía el reporte completo del scanner por correo en formato Dark Mode."""
     gmail_config = NOTIFICATIONS.get('gmail', {})
-    if not gmail_config.get('enabled'): return False
+    if not gmail_config.get('enabled'):
+        st.error("📧 El correo no está habilitado en Secrets.")
+        return False
         
-    sender = gmail_config['user']
-    receiver = gmail_config['destinatario']
-    pwd = gmail_config['password']
-
+    sender, receiver, pwd = gmail_config['user'], gmail_config['destinatario'], gmail_config['password']
     msg = MIMEMultipart("alternative")
     tz = pytz.timezone('America/Monterrey')
     ahora = datetime.now(tz).strftime("%d/%m/%Y %H:%M")
@@ -51,12 +46,9 @@ def enviar_correo_maestro(vix_val, sentiment, df_html):
     <html>
       <body style="font-family: Arial, sans-serif; background-color: #121212; color: #ffffff; padding: 20px;">
         <h2 style="color: #2ecc71;">📊 Informe Quant: {sentiment}</h2>
-        <p><b>Indicador VIX:</b> {vix_val:.2f} | <b>Ubicación:</b> San Pedro GG, NL</p>
+        <p><b>VIX:</b> {vix_val:.2f} | <b>Hora San Pedro:</b> {ahora}</p>
         <hr style="border: 0.5px solid #333;">
-        <div style="overflow-x: auto;">
-            {df_html}
-        </div>
-        <p style="font-size: 11px; color: #666; margin-top: 20px;">Generado por Pato Quant Terminal Pro.</p>
+        <div style="overflow-x: auto;">{df_html}</div>
       </body>
     </html>
     """
@@ -66,18 +58,19 @@ def enviar_correo_maestro(vix_val, sentiment, df_html):
             server.login(sender, pwd)
             server.sendmail(sender, receiver, msg.as_string())
         return True
-    except: return False
+    except Exception as e:
+        st.error(f"❌ Error de Gmail: {str(e)}")
+        return False
 
 def consultar_ia(ticker, precio, rsi, macd, recomendacion):
-    """Consulta al Oráculo Gemini para análisis narrativo."""
     try:
         genai.configure(api_key=API_CONFIG['gemini_api_key'])
         model = genai.GenerativeModel('gemini-1.5-flash')
-        prompt = f"Como analista quant, analiza {ticker} (Precio: {precio}, RSI: {rsi}, MACD: {macd}, Rec: {recomendacion}) en 3 frases."
+        prompt = f"Como experto quant de San Pedro, analiza {ticker}: Precio {precio}, RSI {rsi}, MACD {macd}, Rec {recomendacion} en 3 frases."
         return model.generate_content(prompt).text
-    except: return "⚠️ El Oráculo está fuera de línea."
+    except: return "⚠️ El Oráculo está meditando..."
 
-# --- SEGURIDAD Y CONFIGURACIÓN ---
+# --- SEGURIDAD ---
 try:
     if "API_CONFIG" in st.secrets:
         API_CONFIG, PORTFOLIO_CONFIG = st.secrets["API_CONFIG"], st.secrets["PORTFOLIO_CONFIG"]
@@ -114,18 +107,18 @@ if st.sidebar.button("➕ Agregar"):
         guardar_watchlist(st.session_state.mis_activos); st.rerun()
 
 lista_completa = st.session_state.mis_activos['stocks'] + st.session_state.mis_activos['crypto']
-ticker = st.sidebar.selectbox("Activo a analizar:", lista_completa)
+ticker = st.sidebar.selectbox("Activo:", lista_completa)
 
 if st.sidebar.button("🗑️ Eliminar Seleccionado"):
     for c in ['stocks', 'crypto']:
         if ticker in st.session_state.mis_activos[c]: st.session_state.mis_activos[c].remove(ticker)
     guardar_watchlist(st.session_state.mis_activos); st.rerun()
 
-# 3. Datos y Cálculos
+# 3. Carga de Datos
 data = fetcher.get_portfolio_data([ticker], period='1y')[ticker]
 
 if not data.empty:
-    # Cálculos para Tab 1 y Tab 2
+    # Cálculos Técnicos
     data['SMA20'] = data['Close'].rolling(20).mean()
     data['SMA50'] = data['Close'].rolling(50).mean()
     std = data['Close'].rolling(20).std()
@@ -142,7 +135,7 @@ if not data.empty:
     tab1, tab2, tab3 = st.tabs(["📊 Análisis en Vivo", "🧪 Backtesting Pro", "📋 Scanner Maestro"])
 
     with tab1:
-        # ANÁLISIS VISUAL RESTAURADO
+        # --- TAB 1: DISEÑO RESTAURADO ---
         ana = analyzer.analyze_asset(data, ticker)
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Precio", f"${ana['price']['current']:.2f}", f"{ana['price']['change_pct']:.2f}%")
@@ -151,56 +144,63 @@ if not data.empty:
         m4.metric("Señal", ana['signals']['recommendation'])
 
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05, 
-                            row_heights=[0.5, 0.2, 0.3], subplot_titles=("Precio", "RSI", "MACD"))
-        fig.add_trace(go.Candlestick(x=data.index, open=data['Open'], high=data['High'], low=data['Low'], close=data['Close']), row=1, col=1)
-        fig.add_trace(go.Scatter(x=data.index, y=data['bb_up'], line=dict(color='rgba(173,216,230,0.2)')), row=1, col=1)
-        fig.add_trace(go.Scatter(x=data.index, y=data['bb_low'], line=dict(color='rgba(173,216,230,0.2)'), fill='tonexty'), row=1, col=1)
-        fig.add_trace(go.Scatter(x=data.index, y=data['SMA20'], line=dict(color='orange')), row=1, col=1)
-        fig.add_trace(go.Scatter(x=data.index, y=data['RSI'], line=dict(color='purple')), row=2, col=1)
-        fig.add_trace(go.Bar(x=data.index, y=data['MACD_H'], marker_color=['green' if x > 0 else 'red' for x in data['MACD_H']]), row=3, col=1)
+                            row_heights=[0.5, 0.2, 0.3], subplot_titles=("Precio & Bandas", "RSI", "MACD"))
+        
+        # Panel 1: Velas + BB + SMA20
+        fig.add_trace(go.Candlestick(x=data.index, open=data['Open'], high=data['High'], low=data['Low'], close=data['Close'], name="Velas"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=data.index, y=data['bb_up'], line=dict(color='lightblue', width=1), name="BB Up"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=data.index, y=data['bb_low'], line=dict(color='lightblue', width=1), fill='tonexty', name="BB Low"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=data.index, y=data['SMA20'], line=dict(color='orange', width=1.5), name="SMA20"), row=1, col=1)
+        
+        # Panel 2: RSI
+        fig.add_trace(go.Scatter(x=data.index, y=data['RSI'], line=dict(color='purple'), name="RSI"), row=2, col=1)
+        fig.add_hline(y=70, line_dash="dot", line_color="red", row=2, col=1)
+        fig.add_hline(y=30, line_dash="dot", line_color="green", row=2, col=1)
+        
+        # Panel 3: MACD
+        fig.add_trace(go.Bar(x=data.index, y=data['MACD_H'], marker_color=['green' if x > 0 else 'red' for x in data['MACD_H']], name="MACD"), row=3, col=1)
+        
         fig.update_layout(height=800, template="plotly_dark", showlegend=False, xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
         
-        if st.button("🔮 Consultar Oráculo"):
+        if st.button("🔮 Consultar al Oráculo"):
             st.info(consultar_ia(ticker, ana['price']['current'], data['RSI'].iloc[-1], data['MACD_H'].iloc[-1], ana['signals']['recommendation']))
 
     with tab2:
-        # BACKTESTING CON MÉTRICAS Y TABLA
+        # --- TAB 2: BACKTESTING ---
         cap_ini = st.number_input("Capital Inicial ($)", value=10000)
-        t_profit, s_loss = 0.05, 0.02
-        cap, pos, p_com, h_cap, trades = cap_ini, 0, 0, [], []
+        t_p, s_l = 0.05, 0.02
+        cap, pos, p_c, h_cap, trades = cap_ini, 0, 0, [], []
 
         for i in range(1, len(data)):
             p, rsi, macd, sig = data['Close'].iloc[i], data['RSI'].iloc[i], data['MACD_L'].iloc[i], data['MACD_S'].iloc[i]
             if rsi < 35 and pos == 0:
-                pos, p_com, cap = cap / p, p, 0
+                pos, p_c, cap = cap / p, p, 0
                 trades.append({"Fecha": data.index[i].date(), "Tipo": "🟢 COMPRA", "Precio": round(p, 2), "Motivo": "RSI"})
             elif pos > 0:
-                rend = (p - p_com) / p_com
-                if rend >= t_profit or rend <= -s_loss or (macd < sig and rsi > 50):
+                rend = (p - p_c) / p_c
+                if rend >= t_p or rend <= s_l or (macd < sig and rsi > 50):
                     cap, pos = pos * p, 0
-                    m = "💰 Profit" if rend >= t_profit else "🛡️ StopLoss" if rend <= -s_loss else "📉 MACD"
+                    m = "💰 Profit" if rend >= t_p else "🛡️ Stop" if rend <= -s_l else "📉 MACD"
                     trades.append({"Fecha": data.index[i].date(), "Tipo": "🔴 VENTA", "Precio": round(p, 2), "Motivo": m})
             h_cap.append(cap if pos == 0 else pos * p)
 
-        val_f = cap if pos == 0 else pos * data['Close'].iloc[-1]
-        rend_t = ((val_f - cap_ini) / cap_ini) * 100
+        v_f = cap if pos == 0 else pos * data['Close'].iloc[-1]
         c1, c2, c3 = st.columns(3)
-        c1.metric("Valor Final", f"${val_f:.2f}"); c2.metric("Rendimiento", f"{rend_t:.2f}%"); c3.metric("Trades", len(trades))
+        c1.metric("Valor Final", f"${v_f:.2f}"); c2.metric("Rendimiento", f"{((v_f-cap_ini)/cap_ini)*100:.2f}%"); c3.metric("Trades", len(trades))
         st.plotly_chart(go.Figure(data=[go.Scatter(x=data.index[1:], y=h_cap, fill='tozeroy', line=dict(color='cyan'))]).update_layout(template="plotly_dark"), use_container_width=True)
         
         if trades:
+            st.write("### 📜 Bitácora de Operaciones")
             st.dataframe(pd.DataFrame(trades).sort_values(by="Fecha", ascending=False), use_container_width=True)
-            # Alerta Telegram Automática
             u = trades[-1]
             if u['Fecha'] == data.index[-1].date():
                 tz = pytz.timezone('America/Monterrey')
                 ahora = datetime.now(tz).strftime("%H:%M")
-                if enviar_telegram(f"🤖 SEÑAL ({ahora}): {ticker} {u['Tipo']} @ ${u['Precio']}"):
-                    st.success(f"Alerta enviada a las {ahora}")
+                enviar_telegram(f"🤖 SEÑAL ({ahora}): {ticker} {u['Tipo']} @ ${u['Precio']}")
 
     with tab3:
-        # SCANNER MAESTRO Y ENVÍO POR CORREO
+        # --- TAB 3: SCANNER & CORREO ---
         st.header("📋 Scanner Maestro")
         if st.button("🔍 Iniciar Escaneo"):
             res = []
@@ -209,14 +209,10 @@ if not data.empty:
                 try:
                     d_r = fetcher.get_portfolio_data([t], period='6mo')[t]
                     if not d_r.empty:
-                        d_r['s20'] = d_r['Close'].rolling(20).mean(); d_r['s50'] = d_r['Close'].rolling(50).mean()
                         a_t = analyzer.analyze_asset(d_r, t); ind = a_t['indicators']
                         res.append({
-                            "Ticker": t, "Price": round(float(a_t['price']['current']), 2), "Change %": round(float(a_t['price']['change_pct']), 2),
-                            "SMA20": round(float(d_r['s20'].iloc[-1]), 2), "SMA50": round(float(d_r['s50'].iloc[-1]), 2),
-                            "RSI": round(float(ind.get('rsi', 0)), 2), "ADX": round(float(ind.get('adx', 0)), 2),
-                            "ATR": round(float(ind.get('atr', 0)), 2), "MACD_H": round(float(ind.get('macd_hist', 0)), 2),
-                            "BB_Up": round(float(ind.get('bb_upper', 0)), 2), "BB_Low": round(float(ind.get('bb_lower', 0)), 2),
+                            "Ticker": t, "Price": round(float(a_t['price']['current']), 2), "RSI": round(float(ind.get('rsi', 0)), 2),
+                            "ADX": round(float(ind.get('adx', 0)), 2), "MACD_H": round(float(ind.get('macd_hist', 0)), 2),
                             "Rec": a_t['signals']['recommendation']
                         })
                 except: continue
@@ -230,11 +226,13 @@ if not data.empty:
 
         if 'df_scan' in st.session_state:
             st.markdown("---")
-            if st.button("📧 Enviar Reporte Completo a mi Correo"):
-                vix = yf.Ticker("^VIX").history(period="1d")['Close'].iloc[-1]
-                sentiment = "🟢 RISK ON" if vix < 20 else "🔴 RISK OFF"
-                df_html = st.session_state.df_scan.to_html(index=False)
-                # Estilo Dark para el correo
-                df_html = df_html.replace('table', 'table border="1" style="border-collapse: collapse; width: 100%; color: white; background-color: #1e1e1e;"')
-                if enviar_correo_maestro(vix, sentiment, df_html):
-                    st.success("✅ Reporte completo enviado a Gmail")
+            if st.button("📧 Enviar Reporte por Correo"):
+                with st.spinner("Enviando reporte..."):
+                    vix = yf.Ticker("^VIX").history(period="1d")['Close'].iloc[-1]
+                    sentiment = "🟢 RISK ON" if vix < 20 else "🔴 RISK OFF"
+                    df_html = st.session_state.df_scan.to_html(index=False)
+                    df_html = df_html.replace('table', 'table border="1" style="border-collapse: collapse; width: 100%; color: white; background-color: #1e1e1e;"')
+                    if enviar_correo_maestro(vix, sentiment, df_html):
+                        st.success("✅ ¡Reporte enviado a tu bandeja de entrada!")
+                    else:
+                        st.error("❌ Falló el envío. Revisa tus credenciales de Gmail en Secrets.")
