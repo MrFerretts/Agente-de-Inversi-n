@@ -140,25 +140,37 @@ if not data.empty:
                 st.info(opinion)
 
     with tab2:
-        st.header(f"🧪 Backtesting Completo: {ticker}")
+        st.header(f"🧪 Backtesting Pro: {ticker}")
         cap_ini = st.number_input("Capital Inicial ($)", value=10000)
-        capital, posicion, h_cap, trades = cap_ini, 0, [], []
+        
+        # Parámetros de trading
+        target_profit = 0.05  # 5% de ganancia
+        stop_loss = 0.02      # 2% de pérdida
+        
+        capital, posicion, precio_compra, h_cap, trades = cap_ini, 0, 0, [], []
+
         for i in range(1, len(data)):
             p, rsi, macd, sig = data['Close'].iloc[i], data['RSI_line'].iloc[i], data['MACD_line'].iloc[i], data['MACD_signal'].iloc[i]
+            
+            # LÓGICA DE COMPRA
             if rsi < 35 and posicion == 0:
-                posicion, capital = capital / p, 0
-                trades.append({"Fecha": data.index[i].date(), "Tipo": "🟢 COMPRA", "Precio": round(p, 2), "Capital": round(posicion * p, 2)})
-            elif macd < sig and posicion > 0:
-                capital, posicion = posicion * p, 0
-                trades.append({"Fecha": data.index[i].date(), "Tipo": "🔴 VENTA", "Precio": round(p, 2), "Capital": round(capital, 2)})
+                posicion = capital / p
+                precio_compra = p
+                capital = 0
+                trades.append({"Fecha": data.index[i].date(), "Tipo": "🟢 COMPRA", "Precio": round(p, 2), "Motivo": "RSI Sobrevendido"})
+            
+            # LÓGICA DE VENTA (Más inteligente)
+            elif posicion > 0:
+                rendimiento_actual = (p - precio_compra) / precio_compra
+                
+                # Vendemos si llegamos al objetivo, al tope de pérdida, o si el MACD confirma cambio real
+                if rendimiento_actual >= target_profit or rendimiento_actual <= -stop_loss or (macd < sig and rsi > 50):
+                    capital = posicion * p
+                    motivo_venta = "💰 Take Profit" if rendimiento_actual >= target_profit else "🛡️ Stop Loss" if rendimiento_actual <= -stop_loss else "📉 Cruce MACD"
+                    trades.append({"Fecha": data.index[i].date(), "Tipo": "🔴 VENTA", "Precio": round(p, 2), "Motivo": motivo_venta})
+                    posicion = 0
+            
             h_cap.append(capital if posicion == 0 else posicion * p)
-        val_final = capital if posicion == 0 else posicion * data['Close'].iloc[-1]
-        rend = ((val_final - cap_ini) / cap_ini) * 100
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Valor Final", f"${val_final:.2f}"); c2.metric("Rendimiento", f"{rend:.2f}%"); c3.metric("Trades", len(trades))
-        st.plotly_chart(go.Figure(data=[go.Scatter(x=data.index[1:], y=h_cap, name="Capital", fill='tozeroy', line=dict(color='cyan'))]).update_layout(title="Curva de Capital (1 Año)", template="plotly_dark"), use_container_width=True)
-        st.write("### 📜 Bitácora de Operaciones Completa")
-        if trades: st.dataframe(pd.DataFrame(trades).sort_values(by="Fecha", ascending=False), use_container_width=True)
 
     with tab3:
         st.header("📋 Scanner Maestro de 13 Indicadores")
