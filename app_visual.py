@@ -10,7 +10,7 @@ from technical_analysis import TechnicalAnalyzer
 import google.generativeai as genai
 import requests
 
-# --- FUNCIONES DE APOYO (IA Y TELEGRAM) ---
+# --- FUNCIONES DE APOYO ---
 def enviar_telegram(mensaje):
     tel_config = NOTIFICATIONS.get('telegram', {})
     if tel_config.get('enabled'):
@@ -36,7 +36,8 @@ def consultar_ia(ticker, precio, rsi, macd, recomendacion):
 # --- PUENTE DE SEGURIDAD ---
 try:
     if "API_CONFIG" in st.secrets:
-        API_CONFIG, PORTFOLIO_CONFIG = st.secrets["API_CONFIG"], st.secrets["PORTFOLIO_CONFIG"]
+        API_CONFIG = st.secrets["API_CONFIG"]
+        PORTFOLIO_CONFIG = st.secrets["PORTFOLIO_CONFIG"]
         TECHNICAL_INDICATORS = st.secrets["TECHNICAL_INDICATORS"]
         NOTIFICATIONS = st.secrets.get("NOTIFICATIONS", {}) 
     else: raise Exception("Nube sin secretos")
@@ -63,7 +64,7 @@ fetcher = MarketDataFetcher(API_CONFIG)
 analyzer = TechnicalAnalyzer(TECHNICAL_INDICATORS)
 
 # 3. SIDEBAR
-st.sidebar.header("🕹️ Gestión")
+st.sidebar.header("🕹️ Gestión de Cartera")
 nuevo = st.sidebar.text_input("Añadir Ticker:").upper()
 if st.sidebar.button("➕ Agregar"):
     if nuevo:
@@ -71,18 +72,18 @@ if st.sidebar.button("➕ Agregar"):
         guardar_watchlist(st.session_state.mis_activos); st.rerun()
 
 lista_completa = st.session_state.mis_activos['stocks'] + st.session_state.mis_activos['crypto']
-ticker = st.sidebar.selectbox("Activo:", lista_completa)
+ticker = st.sidebar.selectbox("Selecciona Activo:", lista_completa)
 
-if st.sidebar.button("🗑️ Eliminar"):
+if st.sidebar.button("🗑️ Eliminar Seleccionado"):
     for c in ['stocks', 'crypto']:
         if ticker in st.session_state.mis_activos[c]: st.session_state.mis_activos[c].remove(ticker)
     guardar_watchlist(st.session_state.mis_activos); st.rerun()
 
-# 4. CARGA DE DATOS (1 año)
+# 4. CARGA DE DATOS
 data = fetcher.get_portfolio_data([ticker], period='1y')[ticker]
 
 if not data.empty:
-    # --- CÁLCULOS ---
+    # Cálculos Técnicos Completos
     data['SMA20'] = data['Close'].rolling(20).mean()
     data['SMA50'] = data['Close'].rolling(50).mean()
     std = data['Close'].rolling(20).std()
@@ -100,33 +101,43 @@ if not data.empty:
     tab1, tab2, tab3 = st.tabs(["📊 Análisis en Vivo", "🧪 Backtesting Pro", "📋 Scanner Maestro"])
 
     with tab1:
-        # PESTAÑA 1: TODO EL PODER VISUAL RESTAURADO
+        # --- PESTAÑA 1: VISUALIZACIÓN COMPLETA ---
         ana = analyzer.analyze_asset(data, ticker)
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Precio", f"${ana['price']['current']:.2f}", f"{ana['price']['change_pct']:.2f}%")
-        m2.metric("RSI", f"{data['RSI'].iloc[-1]:.2f}")
+        m2.metric("RSI (14)", f"{data['RSI'].iloc[-1]:.2f}")
         m3.metric("MACD Hist", f"{data['MACD_H'].iloc[-1]:.2f}")
         m4.metric("Señal", ana['signals']['recommendation'])
 
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05, 
                             row_heights=[0.5, 0.2, 0.3], subplot_titles=("Precio & Bandas", "RSI", "MACD"))
+        
+        # Panel 1: Velas + BB + SMAs
         fig.add_trace(go.Candlestick(x=data.index, open=data['Open'], high=data['High'], low=data['Low'], close=data['Close'], name="Precio"), row=1, col=1)
         fig.add_trace(go.Scatter(x=data.index, y=data['bb_up'], line=dict(color='rgba(173,216,230,0.3)'), name="BB Sup"), row=1, col=1)
         fig.add_trace(go.Scatter(x=data.index, y=data['bb_low'], line=dict(color='rgba(173,216,230,0.3)'), fill='tonexty', name="BB Inf"), row=1, col=1)
         fig.add_trace(go.Scatter(x=data.index, y=data['SMA20'], line=dict(color='orange', width=1), name="SMA 20"), row=1, col=1)
         fig.add_trace(go.Scatter(x=data.index, y=data['SMA50'], line=dict(color='blue', width=1), name="SMA 50"), row=1, col=1)
+        
+        # Panel 2: RSI
         fig.add_trace(go.Scatter(x=data.index, y=data['RSI'], line=dict(color='purple'), name="RSI"), row=2, col=1)
+        fig.add_hline(y=70, line_dash="dot", line_color="red", row=2, col=1)
+        fig.add_hline(y=30, line_dash="dot", line_color="green", row=2, col=1)
+        
+        # Panel 3: MACD
         fig.add_trace(go.Bar(x=data.index, y=data['MACD_H'], marker_color=['green' if x > 0 else 'red' for x in data['MACD_H']], name="MACD"), row=3, col=1)
-        fig.update_layout(height=700, template="plotly_dark", showlegend=False, xaxis_rangeslider_visible=False)
+        
+        fig.update_layout(height=800, template="plotly_dark", showlegend=False, xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
         
-        if st.button("🔮 Consultar a Gemini"):
-            with st.spinner("Analizando..."):
+        st.markdown("---")
+        if st.button("🔮 Consultar al Oráculo IA"):
+            with st.spinner("Generando análisis..."):
                 st.info(consultar_ia(ticker, ana['price']['current'], data['RSI'].iloc[-1], data['MACD_H'].iloc[-1], ana['signals']['recommendation']))
 
     with tab2:
-        # PESTAÑA 2: ESTRATEGIA PRO + TELEGRAM
-        st.header(f"🧪 Backtesting Pro: {ticker}")
+        # --- PESTAÑA 2: BACKTESTING CON MÉTRICAS ---
+        st.header(f"🧪 Resultados de Estrategia: {ticker}")
         cap_ini = st.number_input("Capital Inicial ($)", value=10000)
         t_profit, s_loss = 0.05, 0.02
         capital, posicion, p_compra, h_cap, trades = cap_ini, 0, 0, [], []
@@ -135,7 +146,7 @@ if not data.empty:
             p, rsi, macd, sig = data['Close'].iloc[i], data['RSI'].iloc[i], data['MACD_L'].iloc[i], data['MACD_S'].iloc[i]
             if rsi < 35 and posicion == 0:
                 posicion, p_compra, capital = capital / p, p, 0
-                trades.append({"Fecha": data.index[i].date(), "Tipo": "🟢 COMPRA", "Precio": round(p, 2), "Motivo": "RSI"})
+                trades.append({"Fecha": data.index[i].date(), "Tipo": "🟢 COMPRA", "Precio": round(p, 2), "Motivo": "RSI Bajo"})
             elif posicion > 0:
                 rend = (p - p_compra) / p_compra
                 if rend >= t_profit or rend <= -s_loss or (macd < sig and rsi > 50):
@@ -144,19 +155,29 @@ if not data.empty:
                     trades.append({"Fecha": data.index[i].date(), "Tipo": "🔴 VENTA", "Precio": round(p, 2), "Motivo": m})
             h_cap.append(capital if posicion == 0 else posicion * p)
 
-        st.plotly_chart(go.Figure(data=[go.Scatter(x=data.index[1:], y=h_cap, name="Capital", fill='tozeroy')]).update_layout(template="plotly_dark"), use_container_width=True)
+        # REPOSICIÓN DE MÉTRICAS QUE FALTABAN
+        val_f = capital if posicion == 0 else posicion * data['Close'].iloc[-1]
+        rend_t = ((val_f - cap_ini) / cap_ini) * 100
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Valor Final Cuenta", f"${val_f:.2f}")
+        c2.metric("Rendimiento Total", f"{rend_t:.2f}%")
+        c3.metric("Nº de Operaciones", len(trades))
+
+        st.plotly_chart(go.Figure(data=[go.Scatter(x=data.index[1:], y=h_cap, name="Capital", fill='tozeroy', line=dict(color='cyan'))]).update_layout(title="Crecimiento de Cartera (1 Año)", template="plotly_dark"), use_container_width=True)
+        
+        st.write("### 📜 Bitácora de Operaciones")
         if trades:
             st.dataframe(pd.DataFrame(trades).sort_values(by="Fecha", ascending=False), use_container_width=True)
-            st.subheader("📲 Enviar Alerta")
+            st.subheader("📲 Alerta de Última Señal")
             u = trades[-1]
-            if st.button("Enviar última señal a Telegram"):
-                msg = f"🤖 TERMINAL PATO:\nActivo: {ticker}\nSeñal: {u['Tipo']}\nPrecio: ${u['Precio']}\nMotivo: {u['Motivo']}"
-                if enviar_telegram(msg): st.success("✅ Alerta enviada")
+            if st.button("Enviar a Telegram"):
+                msg = f"🤖 TERMINAL PATO:\nActivo: {ticker}\nSeñal: {u['Tipo']}\nPrecio: ${u['Precio']}\nMotivo: {u['Motivo']}\nRendimiento: {rend_t:.2f}%"
+                if enviar_telegram(msg): st.success("✅ Alerta enviada con éxito")
 
     with tab3:
-        # PESTAÑA 3: SCANNER DE 13 INDICADORES RESTAURADO
-        st.header("📋 Scanner Maestro de Precisión")
-        if st.button("🔍 Iniciar Escaneo de 13 Indicadores"):
+        # --- PESTAÑA 3: SCANNER COMPLETO ---
+        st.header("📋 Scanner Maestro de 13 Indicadores")
+        if st.button("🔍 Iniciar Escaneo de Precisión"):
             res = []
             prog = st.progress(0)
             for i, t in enumerate(lista_completa):
@@ -176,6 +197,7 @@ if not data.empty:
                         })
                 except: continue
                 prog.progress((i + 1) / len(lista_completa))
+            
             df = pd.DataFrame(res)
             prio = {"COMPRA FUERTE": 0, "COMPRA": 1, "MANTENER": 2, "VENTA": 3, "VENTA FUERTE": 4}
             df['sort'] = df['Rec'].map(prio); df = df.sort_values('sort').drop('sort', axis=1)
