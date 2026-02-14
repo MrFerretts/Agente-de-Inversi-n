@@ -7,8 +7,26 @@ import os
 import yfinance as yf
 from market_data import MarketDataFetcher
 from technical_analysis import TechnicalAnalyzer
-from config import *
 
+# --- EL PUENTE DE SEGURIDAD (Reemplaza la línea 10 de config) ---
+try:
+    # 1. Intentamos cargar desde los Secrets de la nube
+    if "API_CONFIG" in st.secrets:
+        API_CONFIG = st.secrets["API_CONFIG"]
+        PORTFOLIO_CONFIG = st.secrets["PORTFOLIO_CONFIG"]
+        TECHNICAL_INDICATORS = st.secrets["TECHNICAL_INDICATORS"]
+        # NOTIFICATIONS es opcional si no lo pegaste
+        NOTIFICATIONS = st.secrets.get("NOTIFICATIONS", {}) 
+    else:
+        raise Exception("Nube sin secretos")
+except:
+    # 2. Si falla (estás en tu Mac), usamos el archivo local
+    try:
+        from config import API_CONFIG, PORTFOLIO_CONFIG, TECHNICAL_INDICATORS, NOTIFICATIONS
+    except ImportError:
+        st.error("❌ Error: No se encontró 'config.py' ni 'Secrets'.")
+        st.stop()
+# ---------------------------------------------------------------
 # 1. Funciones de Persistencia
 FILE_PATH = "watchlist.json"
 
