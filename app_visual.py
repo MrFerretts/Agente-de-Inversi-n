@@ -195,14 +195,22 @@ if not data.empty:
 
     if trades:
             ultimo = trades[-1]
-            # Si la última operación es de hoy (o muy reciente)
-            st.write("### 📲 Centro de Alertas")
-            alerta_msg = f"🤖 TERMINAL PATO:\nActivo: {ticker}\nSeñal: {ultimo['Tipo']}\nPrecio: ${ultimo['Precio']}\nMotivo: {ultimo['Motivo']}"
+            st.markdown("---")
+            st.subheader("📲 Centro de Alertas")
+            
+            # Preparamos el mensaje
+            alerta_msg = (
+                f"🤖 TERMINAL PATO QUANT\n\n"
+                f"📈 Activo: {ticker}\n"
+                f"⚡ Señal: {ultimo['Tipo']}\n"
+                f"💵 Precio: ${ultimo['Precio']}\n"
+                f"🎯 Motivo: {ultimo['Motivo']}\n"
+                f"💰 Rendimiento: {rend_t:.2f}%"
+            )
             
             if st.button("Enviar última señal a Telegram"):
-                enviar_telegram(alerta_msg)
-                st.success("✅ ¡Alerta enviada a tu celular!")
-
+                if enviar_telegram(alerta_msg):
+                    st.success("✅ ¡Alerta enviada con éxito!")
     with tab3:
         st.header("📋 Scanner Maestro de 13 Indicadores")
         if st.button("🔍 Iniciar Escaneo de Precisión"):
