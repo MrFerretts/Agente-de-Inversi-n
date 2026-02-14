@@ -92,7 +92,7 @@ def get_full_name(symbol):
 data = fetcher.get_portfolio_data([ticker], period='1y')[ticker]
 
 if not data.empty:
-    # Cálculos Técnicos
+    # --- CÁLCULOS TÉCNICOS ---
     data['SMA20'] = data['Close'].rolling(window=20).mean()
     data['SMA50'] = data['Close'].rolling(window=50).mean()
     std = data['Close'].rolling(window=20).std()
@@ -108,7 +108,8 @@ if not data.empty:
     data['MACD_signal'] = data['MACD_line'].ewm(span=9, adjust=False).mean()
     data['MACD_hist'] = data['MACD_line'] - data['MACD_signal']
 
-    tab1, tab2, tab3 = st.tabs(["📊 Análisis en Vivo", "🧪 Backtesting Histórico", "📋 Scanner Maestro"])
+    # --- PESTAÑAS ---
+    tab1, tab2, tab3 = st.tabs(["📊 Análisis en Vivo", "🧪 Backtesting Pro", "📋 Scanner Maestro"])
 
     with tab1:
         st.title(f"{get_full_name(ticker)} ({ticker})")
@@ -140,37 +141,33 @@ if not data.empty:
                 st.info(opinion)
 
     with tab2:
-        st.header(f"🧪 Backtesting Pro: {ticker}")
+        st.header(f"🧪 Estrategia con Stop Loss & Take Profit: {ticker}")
         cap_ini = st.number_input("Capital Inicial ($)", value=10000)
-        
-        # Parámetros de trading
-        target_profit = 0.05  # 5% de ganancia
-        stop_loss = 0.02      # 2% de pérdida
-        
+        target_profit, stop_loss = 0.05, 0.02 # 5% y 2%
         capital, posicion, precio_compra, h_cap, trades = cap_ini, 0, 0, [], []
 
         for i in range(1, len(data)):
             p, rsi, macd, sig = data['Close'].iloc[i], data['RSI_line'].iloc[i], data['MACD_line'].iloc[i], data['MACD_signal'].iloc[i]
-            
-            # LÓGICA DE COMPRA
             if rsi < 35 and posicion == 0:
-                posicion = capital / p
-                precio_compra = p
-                capital = 0
-                trades.append({"Fecha": data.index[i].date(), "Tipo": "🟢 COMPRA", "Precio": round(p, 2), "Motivo": "RSI Sobrevendido"})
-            
-            # LÓGICA DE VENTA (Más inteligente)
+                posicion, precio_compra, capital = capital / p, p, 0
+                trades.append({"Fecha": data.index[i].date(), "Tipo": "🟢 COMPRA", "Precio": round(p, 2), "Motivo": "RSI Bajo"})
             elif posicion > 0:
-                rendimiento_actual = (p - precio_compra) / precio_compra
-                
-                # Vendemos si llegamos al objetivo, al tope de pérdida, o si el MACD confirma cambio real
-                if rendimiento_actual >= target_profit or rendimiento_actual <= -stop_loss or (macd < sig and rsi > 50):
-                    capital = posicion * p
-                    motivo_venta = "💰 Take Profit" if rendimiento_actual >= target_profit else "🛡️ Stop Loss" if rendimiento_actual <= -stop_loss else "📉 Cruce MACD"
-                    trades.append({"Fecha": data.index[i].date(), "Tipo": "🔴 VENTA", "Precio": round(p, 2), "Motivo": motivo_venta})
-                    posicion = 0
-            
+                rend = (p - precio_compra) / precio_compra
+                if rend >= target_profit or rend <= -stop_loss or (macd < sig and rsi > 50):
+                    capital, posicion = posicion * p, 0
+                    motivo = "💰 Profit" if rend >= target_profit else "🛡️ StopLoss" if rend <= -stop_loss else "📉 MACD"
+                    trades.append({"Fecha": data.index[i].date(), "Tipo": "🔴 VENTA", "Precio": round(p, 2), "Motivo": motivo})
             h_cap.append(capital if posicion == 0 else posicion * p)
+
+        # MOSTRAR RESULTADOS (Lo que faltaba)
+        val_f = capital if posicion == 0 else posicion * data['Close'].iloc[-1]
+        rend_t = ((val_f - cap_ini) / cap_ini) * 100
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Valor Final", f"${val_f:.2f}"); c2.metric("Rendimiento", f"{rend_t:.2f}%"); c3.metric("Operaciones", len(trades))
+        
+        st.plotly_chart(go.Figure(data=[go.Scatter(x=data.index[1:], y=h_cap, name="Capital", fill='tozeroy', line=dict(color='cyan'))]).update_layout(title="Curva de Capital Pro", template="plotly_dark"), use_container_width=True)
+        st.write("### 📜 Bitácora de Operaciones Detallada")
+        if trades: st.dataframe(pd.DataFrame(trades).sort_values(by="Fecha", ascending=False), use_container_width=True)
 
     with tab3:
         st.header("📋 Scanner Maestro de 13 Indicadores")
@@ -187,16 +184,11 @@ if not data.empty:
                             "Ticker": t, "Price": round(float(ana_t['price']['current']), 2), "Change %": round(float(ana_t['price']['change_pct']), 2),
                             "SMA20": round(float(d_r['s20'].iloc[-1]), 2), "SMA50": round(float(d_r['s50'].iloc[-1]), 2),
                             "RSI": round(float(ind.get('rsi', 0)), 2), "stochRSI": round(float(ind.get('stoch_rsi', 0)), 2),
-                            "RVOL": round(float(ind.get('rvol', 0)), 2), "ADX": round(float(ind.get('adx', 0)), 2),
-                            "ATR": round(float(ind.get('atr', 0)), 2), "MACD_H": round(float(ind.get('macd_hist', 0)), 2),
-                            "BB_Up": round(float(ind.get('bb_upper', 0)), 2), "BB_Low": round(float(ind.get('bb_lower', 0)), 2),
-                            "Rec": ana_t['signals']['recommendation']
+                            "ADX": round(float(ind.get('adx', 0)), 2), "Rec": ana_t['signals']['recommendation']
                         })
                 except: continue
                 prog.progress((i + 1) / len(lista_completa))
             df = pd.DataFrame(res_lista)
-            prio = {"COMPRA FUERTE": 0, "COMPRA": 1, "MANTENER": 2, "VENTA": 3, "VENTA FUERTE": 4}
-            df['sort'] = df['Rec'].map(prio); df = df.sort_values('sort').drop('sort', axis=1)
             def st_rec(v):
                 c = '#2ecc71' if 'COMPRA' in v else '#e74c3c' if 'VENTA' in v else '#f1c40f'
                 return f'background-color: {c}; color: black; font-weight: bold'
