@@ -10,7 +10,7 @@ from technical_analysis import TechnicalAnalyzer
 import google.generativeai as genai
 import requests
 from datetime import datetime
-import pytz # Opcional, para manejar tu zona horaria local
+import pytz # Asegúrate de tener 'pytz' en tu requirements.txt
 
 # --- FUNCIONES DE APOYO ---
 def enviar_telegram(mensaje):
@@ -38,8 +38,7 @@ def consultar_ia(ticker, precio, rsi, macd, recomendacion):
 # --- PUENTE DE SEGURIDAD ---
 try:
     if "API_CONFIG" in st.secrets:
-        API_CONFIG = st.secrets["API_CONFIG"]
-        PORTFOLIO_CONFIG = st.secrets["PORTFOLIO_CONFIG"]
+        API_CONFIG, PORTFOLIO_CONFIG = st.secrets["API_CONFIG"], st.secrets["PORTFOLIO_CONFIG"]
         TECHNICAL_INDICATORS = st.secrets["TECHNICAL_INDICATORS"]
         NOTIFICATIONS = st.secrets.get("NOTIFICATIONS", {}) 
     else: raise Exception("Nube sin secretos")
@@ -66,7 +65,7 @@ fetcher = MarketDataFetcher(API_CONFIG)
 analyzer = TechnicalAnalyzer(TECHNICAL_INDICATORS)
 
 # 3. SIDEBAR
-st.sidebar.header("🕹️ Gestión de Cartera")
+st.sidebar.header("🕹️ Gestión")
 nuevo = st.sidebar.text_input("Añadir Ticker:").upper()
 if st.sidebar.button("➕ Agregar"):
     if nuevo:
@@ -74,9 +73,9 @@ if st.sidebar.button("➕ Agregar"):
         guardar_watchlist(st.session_state.mis_activos); st.rerun()
 
 lista_completa = st.session_state.mis_activos['stocks'] + st.session_state.mis_activos['crypto']
-ticker = st.sidebar.selectbox("Selecciona Activo:", lista_completa)
+ticker = st.sidebar.selectbox("Activo:", lista_completa)
 
-if st.sidebar.button("🗑️ Eliminar Seleccionado"):
+if st.sidebar.button("🗑️ Eliminar"):
     for c in ['stocks', 'crypto']:
         if ticker in st.session_state.mis_activos[c]: st.session_state.mis_activos[c].remove(ticker)
     guardar_watchlist(st.session_state.mis_activos); st.rerun()
@@ -85,7 +84,7 @@ if st.sidebar.button("🗑️ Eliminar Seleccionado"):
 data = fetcher.get_portfolio_data([ticker], period='1y')[ticker]
 
 if not data.empty:
-    # Cálculos Técnicos Completos
+    # Cálculos Técnicos
     data['SMA20'] = data['Close'].rolling(20).mean()
     data['SMA50'] = data['Close'].rolling(50).mean()
     std = data['Close'].rolling(20).std()
@@ -103,7 +102,6 @@ if not data.empty:
     tab1, tab2, tab3 = st.tabs(["📊 Análisis en Vivo", "🧪 Backtesting Pro", "📋 Scanner Maestro"])
 
     with tab1:
-        # --- PESTAÑA 1: VISUALIZACIÓN COMPLETA ---
         ana = analyzer.analyze_asset(data, ticker)
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("Precio", f"${ana['price']['current']:.2f}", f"{ana['price']['change_pct']:.2f}%")
@@ -113,32 +111,21 @@ if not data.empty:
 
         fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05, 
                             row_heights=[0.5, 0.2, 0.3], subplot_titles=("Precio & Bandas", "RSI", "MACD"))
-        
-        # Panel 1: Velas + BB + SMAs
         fig.add_trace(go.Candlestick(x=data.index, open=data['Open'], high=data['High'], low=data['Low'], close=data['Close'], name="Precio"), row=1, col=1)
         fig.add_trace(go.Scatter(x=data.index, y=data['bb_up'], line=dict(color='rgba(173,216,230,0.3)'), name="BB Sup"), row=1, col=1)
         fig.add_trace(go.Scatter(x=data.index, y=data['bb_low'], line=dict(color='rgba(173,216,230,0.3)'), fill='tonexty', name="BB Inf"), row=1, col=1)
         fig.add_trace(go.Scatter(x=data.index, y=data['SMA20'], line=dict(color='orange', width=1), name="SMA 20"), row=1, col=1)
         fig.add_trace(go.Scatter(x=data.index, y=data['SMA50'], line=dict(color='blue', width=1), name="SMA 50"), row=1, col=1)
-        
-        # Panel 2: RSI
         fig.add_trace(go.Scatter(x=data.index, y=data['RSI'], line=dict(color='purple'), name="RSI"), row=2, col=1)
-        fig.add_hline(y=70, line_dash="dot", line_color="red", row=2, col=1)
-        fig.add_hline(y=30, line_dash="dot", line_color="green", row=2, col=1)
-        
-        # Panel 3: MACD
         fig.add_trace(go.Bar(x=data.index, y=data['MACD_H'], marker_color=['green' if x > 0 else 'red' for x in data['MACD_H']], name="MACD"), row=3, col=1)
-        
         fig.update_layout(height=800, template="plotly_dark", showlegend=False, xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
         
-        st.markdown("---")
         if st.button("🔮 Consultar al Oráculo IA"):
             with st.spinner("Generando análisis..."):
                 st.info(consultar_ia(ticker, ana['price']['current'], data['RSI'].iloc[-1], data['MACD_H'].iloc[-1], ana['signals']['recommendation']))
 
     with tab2:
-        # --- PESTAÑA 2: BACKTESTING CON MÉTRICAS ---
         st.header(f"🧪 Resultados de Estrategia: {ticker}")
         cap_ini = st.number_input("Capital Inicial ($)", value=10000)
         t_profit, s_loss = 0.05, 0.02
@@ -157,48 +144,35 @@ if not data.empty:
                     trades.append({"Fecha": data.index[i].date(), "Tipo": "🔴 VENTA", "Precio": round(p, 2), "Motivo": m})
             h_cap.append(capital if posicion == 0 else posicion * p)
 
-        # REPOSICIÓN DE MÉTRICAS QUE FALTABAN
+        # MÉTRICAS DE RESUMEN RESTAURADAS
         val_f = capital if posicion == 0 else posicion * data['Close'].iloc[-1]
         rend_t = ((val_f - cap_ini) / cap_ini) * 100
         c1, c2, c3 = st.columns(3)
-        c1.metric("Valor Final Cuenta", f"${val_f:.2f}")
-        c2.metric("Rendimiento Total", f"{rend_t:.2f}%")
-        c3.metric("Nº de Operaciones", len(trades))
+        c1.metric("Valor Final", f"${val_f:.2f}"); c2.metric("Rendimiento", f"{rend_t:.2f}%"); c3.metric("Trades", len(trades))
 
-        st.plotly_chart(go.Figure(data=[go.Scatter(x=data.index[1:], y=h_cap, name="Capital", fill='tozeroy', line=dict(color='cyan'))]).update_layout(title="Crecimiento de Cartera (1 Año)", template="plotly_dark"), use_container_width=True)
+        st.plotly_chart(go.Figure(data=[go.Scatter(x=data.index[1:], y=h_cap, name="Capital", fill='tozeroy', line=dict(color='cyan'))]).update_layout(template="plotly_dark"), use_container_width=True)
         
-        st.write("### 📜 Bitácora de Operaciones")
+        # TABLA DE MOVIMIENTOS RESTAURADA
+        st.write("### 📜 Historial de Operaciones Completo")
         if trades:
-            ultimo = trades[-1]
-            fecha_hoy = data.index[-1].date()
+            st.dataframe(pd.DataFrame(trades).sort_values(by="Fecha", ascending=False), use_container_width=True)
             
-            # --- LÓGICA DE ALERTA AUTOMÁTICA CON HORA EXACTA ---
-            if ultimo['Fecha'] == fecha_hoy:
-                # Generamos el ID de la alerta para evitar duplicados
+            # --- ALERTA AUTOMÁTICA CON HORA DE MONTERREY ---
+            ultimo = trades[-1]
+            if ultimo['Fecha'] == data.index[-1].date():
                 clave_alerta = f"auto_{ticker}_{ultimo['Fecha']}_{ultimo['Tipo']}"
-                
                 if clave_alerta not in st.session_state:
-                    # Capturamos el momento exacto de la detección
-                    ahora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-                    
-                    alerta_msg = (
-                        f"🚨 SEÑAL DETECTADA 🚨\n"
-                        f"----------------------------\n"
-                        f"📈 Activo: {ticker}\n"
-                        f"⚡ Acción: {ultimo['Tipo']}\n"
-                        f"💵 Precio: ${ultimo['Precio']}\n"
-                        f"🎯 Motivo: {ultimo['Motivo']}\n"
-                        f"----------------------------\n"
-                        f"🕒 Detectado: {ahora}\n"
-                        f"📍 Plataforma: Pato Quant Terminal"
-                    )
-                    
-                    if enviar_telegram(alerta_msg):
+                    tz = pytz.timezone('America/Monterrey')
+                    ahora = datetime.now(tz).strftime("%d/%m/%Y %H:%M:%S")
+                    msg = (f"🚨 SEÑAL EN VIVO - {ahora} 🚨\n\n"
+                           f"📈 Activo: {ticker}\n⚡ Acción: {ultimo['Tipo']}\n"
+                           f"💵 Precio: ${ultimo['Precio']}\n🎯 Motivo: {ultimo['Motivo']}\n"
+                           f"📍 San Pedro Garza García, NL")
+                    if enviar_telegram(msg):
                         st.session_state[clave_alerta] = True
-                        st.success(f"✅ Alerta automática enviada a las {ahora}")
+                        st.success(f"⚡ Alerta enviada automáticamente ({ahora})")
 
     with tab3:
-        # --- PESTAÑA 3: SCANNER COMPLETO ---
         st.header("📋 Scanner Maestro de 13 Indicadores")
         if st.button("🔍 Iniciar Escaneo de Precisión"):
             res = []
