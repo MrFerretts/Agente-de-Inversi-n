@@ -8,25 +8,22 @@ import yfinance as yf
 from market_data import MarketDataFetcher
 from technical_analysis import TechnicalAnalyzer
 
-# --- EL PUENTE DE SEGURIDAD (Reemplaza la línea 10 de config) ---
+# --- EL PUENTE DE SEGURIDAD ---
 try:
-    # 1. Intentamos cargar desde los Secrets de la nube
     if "API_CONFIG" in st.secrets:
         API_CONFIG = st.secrets["API_CONFIG"]
         PORTFOLIO_CONFIG = st.secrets["PORTFOLIO_CONFIG"]
         TECHNICAL_INDICATORS = st.secrets["TECHNICAL_INDICATORS"]
-        # NOTIFICATIONS es opcional si no lo pegaste
         NOTIFICATIONS = st.secrets.get("NOTIFICATIONS", {}) 
     else:
         raise Exception("Nube sin secretos")
 except:
-    # 2. Si falla (estás en tu Mac), usamos el archivo local
     try:
         from config import API_CONFIG, PORTFOLIO_CONFIG, TECHNICAL_INDICATORS, NOTIFICATIONS
     except ImportError:
         st.error("❌ Error: No se encontró 'config.py' ni 'Secrets'.")
         st.stop()
-# ---------------------------------------------------------------
+
 # 1. Funciones de Persistencia
 FILE_PATH = "watchlist.json"
 
@@ -49,8 +46,10 @@ if 'mis_activos' not in st.session_state:
 fetcher = MarketDataFetcher(API_CONFIG)
 analyzer = TechnicalAnalyzer(TECHNICAL_INDICATORS)
 
-# 3. SIDEBAR: Gestión
+# 3. SIDEBAR: Gestión de Cartera
 st.sidebar.header("🕹️ Gestión de Cartera")
+
+# --- SECCIÓN AÑADIR ---
 nuevo = st.sidebar.text_input("Añadir Ticker:").upper()
 if st.sidebar.button("➕ Agregar"):
     if nuevo and nuevo not in st.session_state.mis_activos['stocks']:
@@ -59,8 +58,21 @@ if st.sidebar.button("➕ Agregar"):
         st.rerun()
 
 st.sidebar.markdown("---")
+
+# --- SECCIÓN SELECCIONAR Y ELIMINAR ---
 lista_completa = st.session_state.mis_activos['stocks'] + st.session_state.mis_activos['crypto']
 ticker = st.sidebar.selectbox("Analizar en detalle:", lista_completa)
+
+# AQUÍ REINSERTAMOS EL BOTÓN QUE FALTABA
+if st.sidebar.button("🗑️ Eliminar Seleccionado"):
+    if ticker in st.session_state.mis_activos['stocks']:
+        st.session_state.mis_activos['stocks'].remove(ticker)
+    elif ticker in st.session_state.mis_activos['crypto']:
+        st.session_state.mis_activos['crypto'].remove(ticker)
+    
+    guardar_watchlist(st.session_state.mis_activos)
+    st.sidebar.warning(f"¡{ticker} eliminado!")
+    st.rerun()
 
 @st.cache_data(ttl=86400)
 def get_full_name(symbol):
@@ -76,7 +88,7 @@ st.title(f"📊 {nombre_completo} ({ticker})")
 data = fetcher.get_portfolio_data([ticker], period='6mo')[ticker]
 
 if not data.empty:
-    # Cálculos manuales para asegurar gráficas correctas
+    # Cálculos manuales
     data['SMA20'] = data['Close'].rolling(window=20).mean()
     data['SMA50'] = data['Close'].rolling(window=50).mean()
     std = data['Close'].rolling(window=20).std()
@@ -95,7 +107,7 @@ if not data.empty:
     data['MACD_signal'] = data['MACD_line'].ewm(span=9, adjust=False).mean()
     data['MACD_hist'] = data['MACD_line'] - data['MACD_signal']
 
-    # Métricas Superiores con formato de 2 decimales
+    # Métricas Superiores
     analysis = analyzer.analyze_asset(data, ticker)
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Precio", f"${analysis['price']['current']:.2f}", f"{analysis['price']['change_pct']:.2f}%")
@@ -103,22 +115,27 @@ if not data.empty:
     m3.metric("MACD Hist", f"{data['MACD_hist'].iloc[-1]:.2f}")
     m4.metric("Señal", analysis['signals']['recommendation'])
 
-    # Gráfica
+    # Gráfica Multipanel
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05, 
                         row_heights=[0.5, 0.2, 0.3], subplot_titles=("Precio & Bandas", "RSI", "MACD"))
+    
     fig.add_trace(go.Candlestick(x=data.index, open=data['Open'], high=data['High'], low=data['Low'], close=data['Close'], name="Precio"), row=1, col=1)
     fig.add_trace(go.Scatter(x=data.index, y=data['bb_upper'], line=dict(color='rgba(173,216,230,0.3)'), name="BB Sup"), row=1, col=1)
     fig.add_trace(go.Scatter(x=data.index, y=data['bb_lower'], line=dict(color='rgba(173,216,230,0.3)'), fill='tonexty', name="BB Inf"), row=1, col=1)
     fig.add_trace(go.Scatter(x=data.index, y=data['SMA20'], line=dict(color='orange', width=1), name="SMA 20"), row=1, col=1)
     fig.add_trace(go.Scatter(x=data.index, y=data['SMA50'], line=dict(color='blue', width=1), name="SMA 50"), row=1, col=1)
+    
     fig.add_trace(go.Scatter(x=data.index, y=data['RSI_line'], line=dict(color='purple'), name="RSI"), row=2, col=1)
     fig.add_hline(y=70, line_dash="dot", line_color="red", row=2, col=1)
     fig.add_hline(y=30, line_dash="dot", line_color="green", row=2, col=1)
-    fig.add_trace(go.Bar(x=data.index, y=data['MACD_hist'], marker_color=['green' if x > 0 else 'red' for x in data['MACD_hist']], name="MACD Hist"), row=3, col=1)
+    
+    colors = ['green' if x > 0 else 'red' for x in data['MACD_hist']]
+    fig.add_trace(go.Bar(x=data.index, y=data['MACD_hist'], marker_color=colors, name="MACD Hist"), row=3, col=1)
+    
     fig.update_layout(height=700, template="plotly_dark", showlegend=False, xaxis_rangeslider_visible=False)
     st.plotly_chart(fig, use_container_width=True)
 
-# --- SECCIÓN: TABLA MAESTRA CON CORRECCIÓN DE SMAS Y FORMATO ---
+# --- SECCIÓN: TABLA MAESTRA ---
 st.markdown("---")
 st.header("📋 Scanner Maestro (Formato de Precisión)")
 
@@ -130,7 +147,6 @@ if st.button("🔍 Iniciar Escaneo"):
         try:
             d_res = fetcher.get_portfolio_data([t], period='6mo')[t]
             if not d_res.empty:
-                # CORRECCIÓN: Calculamos SMAs manuales antes de pasar al analyzer
                 d_res['sma_20_calc'] = d_res['Close'].rolling(window=20).mean()
                 d_res['sma_50_calc'] = d_res['Close'].rolling(window=50).mean()
                 
@@ -157,16 +173,12 @@ if st.button("🔍 Iniciar Escaneo"):
         progreso.progress((i + 1) / len(lista_completa))
     
     df_resumen = pd.DataFrame(resumen_lista)
-    
-    # Ordenar por oportunidad
     prioridad = {"COMPRA FUERTE": 0, "COMPRA": 1, "MANTENER": 2, "VENTA": 3, "VENTA FUERTE": 4}
     df_resumen['sort_idx'] = df_resumen['Rec'].map(prioridad)
     df_resumen = df_resumen.sort_values('sort_idx').drop('sort_idx', axis=1)
 
-    # Estilo visual de la tabla
     def style_rec(val):
         color = '#2ecc71' if 'COMPRA' in val else '#e74c3c' if 'VENTA' in val else '#f1c40f'
         return f'background-color: {color}; color: black; font-weight: bold'
 
-    # Mostramos la tabla formateada
     st.dataframe(df_resumen.style.applymap(style_rec, subset=['Rec']).format(precision=2), use_container_width=True)
