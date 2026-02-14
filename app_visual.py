@@ -6,7 +6,29 @@ import json
 import os
 import yfinance as yf
 from market_data import MarketDataFetcher
-from technical_analysis import TechnicalAnalyzer
+from technical_analysis 
+import TechnicalAnalyzerimport google.generativeai as genai
+
+def consultar_ia(ticker, precio, rsi, macd, recomendacion):
+    try:
+        # Usamos la llave que ya tienes guardada en Secrets
+        genai.configure(api_key=API_CONFIG['gemini_api_key'])
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        
+        prompt = f"""
+        Actúa como un experto analista quant. 
+        Analiza el activo {ticker} con estos datos:
+        - Precio actual: ${precio:.2f}
+        - RSI (14): {rsi:.2f}
+        - MACD Histograma: {macd:.2f}
+        - Recomendación técnica: {recomendacion}
+        
+        Dame un análisis de 3 oraciones sobre si es buen momento para entrar o no y por qué.
+        """
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return "⚠️ La IA está meditando (revisa tu API Key en Secrets)."
 
 # --- PUENTE DE SEGURIDAD ---
 try:
