@@ -143,6 +143,19 @@ if not data.empty:
         fig.update_layout(height=700, template="plotly_dark", showlegend=False, xaxis_rangeslider_visible=False)
         st.plotly_chart(fig, use_container_width=True)
 
+        st.markdown("---")
+        st.subheader("🤖 El Oráculo IA")
+        if st.button("🔮 Consultar a Gemini"):
+            with st.spinner("Analizando mercado..."):
+                opinion = consultar_ia(
+                    ticker, 
+                    analysis['price']['current'], 
+                    data['RSI_line'].iloc[-1], 
+                    data['MACD_hist'].iloc[-1],
+                    analysis['signals']['recommendation']
+                )
+                st.info(opinion)
+
     with tab2:
         st.header(f"🧪 Backtesting Completo: {ticker}")
         cap_ini = st.number_input("Capital Inicial ($)", value=10000)
