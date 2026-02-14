@@ -8,6 +8,20 @@ import yfinance as yf
 from market_data import MarketDataFetcher
 from technical_analysis import TechnicalAnalyzer
 import google.generativeai as genai
+import requests
+
+def enviar_telegram(mensaje):
+    """Envía un mensaje a tu Telegram usando los Secrets."""
+    # Verificamos si Telegram está habilitado en los secretos
+    tel_config = NOTIFICATIONS.get('telegram', {})
+    if tel_config.get('enabled'):
+        token = tel_config.get('bot_token')
+        chat_id = tel_config.get('chat_id')
+        url = f"https://api.telegram.org/bot{token}/sendMessage?chat_id={chat_id}&text={mensaje}"
+        try:
+            requests.get(url)
+        except Exception as e:
+            st.error(f"Error al enviar Telegram: {e}")
 
 # --- PUENTE DE SEGURIDAD ---
 try:
@@ -168,6 +182,16 @@ if not data.empty:
         st.plotly_chart(go.Figure(data=[go.Scatter(x=data.index[1:], y=h_cap, name="Capital", fill='tozeroy', line=dict(color='cyan'))]).update_layout(title="Curva de Capital Pro", template="plotly_dark"), use_container_width=True)
         st.write("### 📜 Bitácora de Operaciones Detallada")
         if trades: st.dataframe(pd.DataFrame(trades).sort_values(by="Fecha", ascending=False), use_container_width=True)
+
+    if trades:
+            ultimo = trades[-1]
+            # Si la última operación es de hoy (o muy reciente)
+            st.write("### 📲 Centro de Alertas")
+            alerta_msg = f"🤖 TERMINAL PATO:\nActivo: {ticker}\nSeñal: {ultimo['Tipo']}\nPrecio: ${ultimo['Precio']}\nMotivo: {ultimo['Motivo']}"
+            
+            if st.button("Enviar última señal a Telegram"):
+                enviar_telegram(alerta_msg)
+                st.success("✅ ¡Alerta enviada a tu celular!")
 
     with tab3:
         st.header("📋 Scanner Maestro de 13 Indicadores")
