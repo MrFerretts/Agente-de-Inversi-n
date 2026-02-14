@@ -9,6 +9,8 @@ from market_data import MarketDataFetcher
 from technical_analysis import TechnicalAnalyzer
 import google.generativeai as genai
 import requests
+from datetime import datetime
+import pytz # Opcional, para manejar tu zona horaria local
 
 # --- FUNCIONES DE APOYO ---
 def enviar_telegram(mensaje):
@@ -167,12 +169,33 @@ if not data.empty:
         
         st.write("### 📜 Bitácora de Operaciones")
         if trades:
-            st.dataframe(pd.DataFrame(trades).sort_values(by="Fecha", ascending=False), use_container_width=True)
-            st.subheader("📲 Alerta de Última Señal")
-            u = trades[-1]
-            if st.button("Enviar a Telegram"):
-                msg = f"🤖 TERMINAL PATO:\nActivo: {ticker}\nSeñal: {u['Tipo']}\nPrecio: ${u['Precio']}\nMotivo: {u['Motivo']}\nRendimiento: {rend_t:.2f}%"
-                if enviar_telegram(msg): st.success("✅ Alerta enviada con éxito")
+            ultimo = trades[-1]
+            fecha_hoy = data.index[-1].date()
+            
+            # --- LÓGICA DE ALERTA AUTOMÁTICA CON HORA EXACTA ---
+            if ultimo['Fecha'] == fecha_hoy:
+                # Generamos el ID de la alerta para evitar duplicados
+                clave_alerta = f"auto_{ticker}_{ultimo['Fecha']}_{ultimo['Tipo']}"
+                
+                if clave_alerta not in st.session_state:
+                    # Capturamos el momento exacto de la detección
+                    ahora = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+                    
+                    alerta_msg = (
+                        f"🚨 SEÑAL DETECTADA 🚨\n"
+                        f"----------------------------\n"
+                        f"📈 Activo: {ticker}\n"
+                        f"⚡ Acción: {ultimo['Tipo']}\n"
+                        f"💵 Precio: ${ultimo['Precio']}\n"
+                        f"🎯 Motivo: {ultimo['Motivo']}\n"
+                        f"----------------------------\n"
+                        f"🕒 Detectado: {ahora}\n"
+                        f"📍 Plataforma: Pato Quant Terminal"
+                    )
+                    
+                    if enviar_telegram(alerta_msg):
+                        st.session_state[clave_alerta] = True
+                        st.success(f"✅ Alerta automática enviada a las {ahora}")
 
     with tab3:
         # --- PESTAÑA 3: SCANNER COMPLETO ---
