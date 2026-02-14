@@ -8,19 +8,20 @@ import yfinance as yf
 from market_data import MarketDataFetcher
 from technical_analysis import TechnicalAnalyzer
 
-# --- PUENTE DE SEGURIDAD ---
+# --- PUENTE DE SEGURIDAD ANTICRASH ---
 try:
     if "API_CONFIG" in st.secrets:
         API_CONFIG = st.secrets["API_CONFIG"]
         PORTFOLIO_CONFIG = st.secrets["PORTFOLIO_CONFIG"]
         TECHNICAL_INDICATORS = st.secrets["TECHNICAL_INDICATORS"]
+        NOTIFICATIONS = st.secrets.get("NOTIFICATIONS", {}) 
     else:
-        raise Exception("Nube sin secretos")
+        raise Exception("Sin secretos")
 except:
     try:
-        from config import API_CONFIG, PORTFOLIO_CONFIG, TECHNICAL_INDICATORS
+        from config import API_CONFIG, PORTFOLIO_CONFIG, TECHNICAL_INDICATORS, NOTIFICATIONS
     except ImportError:
-        st.error("❌ Error: No se encontró configuración.")
+        st.error("❌ Error Crítico: No se encontró configuración.")
         st.stop()
 
 # 1. Funciones de Persistencia
@@ -54,19 +55,29 @@ st.sidebar.markdown("---")
 lista_completa = st.session_state.mis_activos['stocks'] + st.session_state.mis_activos['crypto']
 ticker = st.sidebar.selectbox("Selecciona Activo:", lista_completa)
 
-if st.sidebar.button("🗑️ Eliminar"):
+if st.sidebar.button("🗑️ Eliminar Seleccionado"):
     for cat in ['stocks', 'crypto']:
         if ticker in st.session_state.mis_activos[cat]: st.session_state.mis_activos[cat].remove(ticker)
     guardar_watchlist(st.session_state.mis_activos)
     st.rerun()
 
-# --- CARGA DE DATOS (1 año para backtesting) ---
+@st.cache_data(ttl=86400)
+def get_full_name(symbol):
+    try:
+        t = yf.Ticker(symbol)
+        return t.info.get('longName', symbol)
+    except: return symbol
+
+# 4. CARGA Y CÁLCULOS (1 año para todas las funciones)
 data = fetcher.get_portfolio_data([ticker], period='1y')[ticker]
 
 if not data.empty:
-    # Cálculos Manuales (RSI, MACD, SMA)
+    # Cálculos Manuales de Precisión
     data['SMA20'] = data['Close'].rolling(window=20).mean()
     data['SMA50'] = data['Close'].rolling(window=50).mean()
+    std = data['Close'].rolling(window=20).std()
+    data['bb_upper'] = data['SMA20'] + (std * 2)
+    data['bb_lower'] = data['SMA20'] - (std * 2)
     delta = data['Close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
@@ -78,64 +89,88 @@ if not data.empty:
     data['MACD_hist'] = data['MACD_line'] - data['MACD_signal']
 
     # --- PESTAÑAS ---
-    tab1, tab2, tab3 = st.tabs(["📊 Análisis en Vivo", "🧪 Backtesting", "📋 Scanner"])
+    tab1, tab2, tab3 = st.tabs(["📊 Análisis en Vivo", "🧪 Backtesting", "📋 Scanner Maestro"])
 
     with tab1:
-        st.title(f"Análisis: {ticker}")
-        # Aquí va tu código de gráficas y métricas (Omitido por brevedad, es el mismo que ya tienes)
-        st.plotly_chart(go.Figure(data=[go.Candlestick(x=data.index, open=data['Open'], high=data['High'], low=data['Low'], close=data['Close'])]), use_container_width=True)
+        st.title(f"{get_full_name(ticker)} ({ticker})")
+        analysis = analyzer.analyze_asset(data, ticker)
+        
+        # Métricas Superiores
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Precio", f"${analysis['price']['current']:.2f}", f"{analysis['price']['change_pct']:.2f}%")
+        m2.metric("RSI", f"{data['RSI_line'].iloc[-1]:.2f}")
+        m3.metric("MACD Hist", f"{data['MACD_hist'].iloc[-1]:.2f}")
+        m4.metric("Señal", analysis['signals']['recommendation'])
+
+        # Gráfica Multipanel Restaurada
+        fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.05, 
+                            row_heights=[0.5, 0.2, 0.3], subplot_titles=("Precio & Bandas", "RSI", "MACD"))
+        
+        fig.add_trace(go.Candlestick(x=data.index, open=data['Open'], high=data['High'], low=data['Low'], close=data['Close'], name="Precio"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=data.index, y=data['bb_upper'], line=dict(color='rgba(173,216,230,0.3)'), name="BB Sup"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=data.index, y=data['bb_lower'], line=dict(color='rgba(173,216,230,0.3)'), fill='tonexty', name="BB Inf"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=data.index, y=data['SMA20'], line=dict(color='orange', width=1), name="SMA 20"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=data.index, y=data['SMA50'], line=dict(color='blue', width=1), name="SMA 50"), row=1, col=1)
+        fig.add_trace(go.Scatter(x=data.index, y=data['RSI_line'], line=dict(color='purple'), name="RSI"), row=2, col=1)
+        fig.add_hline(y=70, line_dash="dot", line_color="red", row=2, col=1); fig.add_hline(y=30, line_dash="dot", line_color="green", row=2, col=1)
+        fig.add_trace(go.Bar(x=data.index, y=data['MACD_hist'], marker_color=['green' if x > 0 else 'red' for x in data['MACD_hist']], name="MACD Hist"), row=3, col=1)
+        
+        fig.update_layout(height=700, template="plotly_dark", showlegend=False, xaxis_rangeslider_visible=False)
+        st.plotly_chart(fig, use_container_width=True)
 
     with tab2:
-        st.header(f"Simulación de Estrategia: {ticker}")
-        capital_inicial = st.number_input("Capital Inicial ($)", value=10000)
-        
-        # Lógica del Backtest
-        capital = capital_inicial
-        posicion = 0 # 0 = fuera, 1 = comprado
-        historial_capital = []
-        trades = []
+        st.header(f"🧪 Simulación: {ticker}")
+        cap_ini = st.number_input("Capital Inicial ($)", value=10000)
+        capital, posicion, h_cap, trades = cap_ini, 0, [], []
 
         for i in range(1, len(data)):
-            precio = data['Close'].iloc[i]
-            rsi = data['RSI_line'].iloc[i]
-            macd = data['MACD_line'].iloc[i]
-            signal = data['MACD_signal'].iloc[i]
-
-            # SEÑAL COMPRA: RSI < 30
+            p, rsi, macd, sig = data['Close'].iloc[i], data['RSI_line'].iloc[i], data['MACD_line'].iloc[i], data['MACD_signal'].iloc[i]
             if rsi < 35 and posicion == 0:
-                posicion = capital / precio
-                capital = 0
-                trades.append({"Fecha": data.index[i], "Tipo": "COMPRA", "Precio": precio})
+                posicion, capital = capital / p, 0
+                trades.append({"Fecha": data.index[i].date(), "Tipo": "COMPRA", "Precio": round(p, 2)})
+            elif macd < sig and posicion > 0:
+                capital, posicion = posicion * p, 0
+                trades.append({"Fecha": data.index[i].date(), "Tipo": "VENTA", "Precio": round(p, 2)})
+            h_cap.append(capital if posicion == 0 else posicion * p)
 
-            # SEÑAL VENTA: MACD cruza abajo
-            elif macd < signal and posicion > 0:
-                capital = posicion * precio
-                posicion = 0
-                trades.append({"Fecha": data.index[i], "Tipo": "VENTA", "Precio": precio})
-            
-            # Tracking del valor de la cuenta
-            valor_actual = capital if posicion == 0 else posicion * precio
-            historial_capital.append(valor_actual)
-
-        # Resultados del Backtest
-        final_val = capital if posicion == 0 else posicion * data['Close'].iloc[-1]
-        rendimiento = ((final_val - capital_inicial) / capital_inicial) * 100
-        
+        val_final = capital if posicion == 0 else posicion * data['Close'].iloc[-1]
+        rend = ((val_final - cap_ini) / cap_ini) * 100
         c1, c2, c3 = st.columns(3)
-        c1.metric("Valor Final", f"${final_val:.2f}")
-        c2.metric("Rendimiento", f"{rendimiento:.2f}%")
-        c3.metric("Nº Operaciones", len(trades))
-
-        # Gráfica de Crecimiento
-        fig_equity = go.Figure()
-        fig_equity.add_trace(go.Scatter(x=data.index[1:], y=historial_capital, name="Tu Estrategia", line=dict(color='cyan')))
-        fig_equity.update_layout(title="Curva de Capital (1 Año)", template="plotly_dark")
-        st.plotly_chart(fig_equity, use_container_width=True)
+        c1.metric("Valor Final", f"${val_final:.2f}"); c2.metric("Rendimiento", f"{rend:.2f}%"); c3.metric("Trades", len(trades))
         
-        if trades:
-            st.write("### Historial de Trades")
-            st.table(pd.DataFrame(trades).tail(10))
+        fig_e = go.Figure(); fig_e.add_trace(go.Scatter(x=data.index[1:], y=h_cap, name="Capital", line=dict(color='cyan')))
+        fig_e.update_layout(title="Curva de Capital (1 Año)", template="plotly_dark"); st.plotly_chart(fig_e, use_container_width=True)
+        if trades: st.write("### Últimos Movimientos"); st.table(pd.DataFrame(trades).tail(5))
 
     with tab3:
-        st.header("Resumen General")
-        # Aquí pones tu botón de "Iniciar Escaneo" y la tabla maestra que ya funciona
+        st.header("📋 Scanner Maestro de Cartera")
+        if st.button("🔍 Iniciar Escaneo Completo"):
+            res_lista = []
+            prog = st.progress(0)
+            for i, t in enumerate(lista_completa):
+                try:
+                    d_r = fetcher.get_portfolio_data([t], period='1y')[t]
+                    if not d_r.empty:
+                        d_r['s20'] = d_r['Close'].rolling(20).mean(); d_r['s50'] = d_r['Close'].rolling(50).mean()
+                        ana_t = analyzer.analyze_asset(d_r, t); ind = ana_t['indicators']
+                        res_lista.append({
+                            "Ticker": t, "Price": round(float(ana_t['price']['current']), 2), "Change %": round(float(ana_t['price']['change_pct']), 2),
+                            "SMA20": round(float(d_r['s20'].iloc[-1]), 2), "SMA50": round(float(d_r['s50'].iloc[-1]), 2),
+                            "RSI": round(float(ind.get('rsi', 0)), 2), "stochRSI": round(float(ind.get('stoch_rsi', 0)), 2),
+                            "RVOL": round(float(ind.get('rvol', 0)), 2), "ADX": round(float(ind.get('adx', 0)), 2),
+                            "ATR": round(float(ind.get('atr', 0)), 2), "MACD_H": round(float(ind.get('macd_hist', 0)), 2),
+                            "BB_Up": round(float(ind.get('bb_upper', 0)), 2), "BB_Low": round(float(ind.get('bb_lower', 0)), 2),
+                            "Rec": ana_t['signals']['recommendation']
+                        })
+                except: continue
+                prog.progress((i + 1) / len(lista_completa))
+            
+            df = pd.DataFrame(res_lista)
+            prio = {"COMPRA FUERTE": 0, "COMPRA": 1, "MANTENER": 2, "VENTA": 3, "VENTA FUERTE": 4}
+            df['sort'] = df['Rec'].map(prio); df = df.sort_values('sort').drop('sort', axis=1)
+            
+            def st_rec(v):
+                c = '#2ecc71' if 'COMPRA' in v else '#e74c3c' if 'VENTA' in v else '#f1c40f'
+                return f'background-color: {c}; color: black; font-weight: bold'
+            
+            st.dataframe(df.style.applymap(st_rec, subset=['Rec']).format(precision=2), use_container_width=True)
